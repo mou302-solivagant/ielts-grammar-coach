@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import db, { initDb } from './db.js';
+import supabase from './db.js';
 import { callClaude, parseJsonFromModel } from './claude.js';
 
 const app = express();
@@ -69,23 +69,33 @@ ${essayText}
     });
     const parsed = parseJsonFromModel(raw);
 
-    await db.read();
-    const id = db.data.nextAnalysisId++;
-    const record = {
-      id,
-      taskType,
-      promptText: hasPrompt ? promptText.trim() : '',
-      essayText,
-      bandScore: parsed.bandScore ?? null,
-      criteria: parsed.criteria ?? {},
-      sentenceCorrections: parsed.sentenceCorrections ?? [],
-      errorDiagnosis: parsed.errorDiagnosis ?? [],
-      createdAt: new Date().toISOString()
-    };
-    db.data.writingAnalyses.push(record);
-    await db.write();
+    const { data: inserted, error: insertError } = await supabase
+      .from('writing_analyses')
+      .insert({
+        task_type: taskType,
+        prompt_text: hasPrompt ? promptText.trim() : '',
+        essay_text: essayText,
+        band_score: parsed.bandScore ?? null,
+        criteria: parsed.criteria ?? {},
+        sentence_corrections: parsed.sentenceCorrections ?? [],
+        error_diagnosis: parsed.errorDiagnosis ?? []
+      })
+      .select()
+      .single();
 
-    res.json(record);
+    if (insertError) throw new Error(`Supabase 寫入失敗：${insertError.message}`);
+
+    res.json({
+      id: inserted.id,
+      taskType: inserted.task_type,
+      promptText: inserted.prompt_text,
+      essayText: inserted.essay_text,
+      bandScore: inserted.band_score,
+      criteria: inserted.criteria,
+      sentenceCorrections: inserted.sentence_corrections,
+      errorDiagnosis: inserted.error_diagnosis,
+      createdAt: inserted.created_at
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -93,24 +103,40 @@ ${essayText}
 });
 
 app.get('/api/writing-analyses', async (req, res) => {
-  await db.read();
-  const rows = [...db.data.writingAnalyses].sort((a, b) => b.id - a.id).slice(0, 20);
-  res.json(rows);
+  try {
+    const { data, error } = await supabase
+      .from('writing_analyses')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (error) throw new Error(error.message);
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- 弱項（來自寫作分析診斷，累積所有分析） ----------
 app.get('/api/weak-areas', async (req, res) => {
-  await db.read();
-  const totals = {};
-  for (const analysis of db.data.writingAnalyses) {
-    for (const item of analysis.errorDiagnosis ?? []) {
-      const key = `${item.category}__${item.subcategory}`;
-      totals[key] ||= { category: item.category, subcategory: item.subcategory, totalCount: 0 };
-      totals[key].totalCount += item.count || 0;
+  try {
+    const { data, error } = await supabase.from('writing_analyses').select('error_diagnosis');
+    if (error) throw new Error(error.message);
+
+    const totals = {};
+    for (const analysis of data) {
+      for (const item of analysis.error_diagnosis ?? []) {
+        const key = `${item.category}__${item.subcategory}`;
+        totals[key] ||= { category: item.category, subcategory: item.subcategory, totalCount: 0 };
+        totals[key].totalCount += item.count || 0;
+      }
     }
+    const result = Object.values(totals).sort((a, b) => b.totalCount - a.totalCount);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
-  const result = Object.values(totals).sort((a, b) => b.totalCount - a.totalCount);
-  res.json(result);
 });
 
 // ---------- 文法練習：產生題目 ----------
@@ -153,20 +179,16 @@ app.post('/api/grade-answer', async (req, res) => {
     const raw = await callClaude({ system, prompt, maxTokens: 800 });
     const parsed = parseJsonFromModel(raw);
 
-    await db.read();
-    const id = db.data.nextAttemptId++;
-    db.data.practiceAttempts.push({
-      id,
+    const { error: insertError } = await supabase.from('practice_attempts').insert({
       category,
       subcategory,
       question,
-      userAnswer,
-      isCorrect: !!parsed.isCorrect,
-      explanationZh: parsed.explanationZh ?? '',
-      correctAnswer: parsed.correctAnswer ?? '',
-      createdAt: new Date().toISOString()
+      user_answer: userAnswer,
+      is_correct: !!parsed.isCorrect,
+      explanation_zh: parsed.explanationZh ?? '',
+      correct_answer: parsed.correctAnswer ?? ''
     });
-    await db.write();
+    if (insertError) throw new Error(`Supabase 寫入失敗：${insertError.message}`);
 
     res.json(parsed);
   } catch (err) {
@@ -177,37 +199,42 @@ app.post('/api/grade-answer', async (req, res) => {
 
 // ---------- 進度追蹤 ----------
 app.get('/api/progress', async (req, res) => {
-  await db.read();
-  const attempts = db.data.practiceAttempts;
+  try {
+    const { data: attempts, error } = await supabase
+      .from('practice_attempts')
+      .select('category, subcategory, is_correct');
+    if (error) throw new Error(error.message);
 
-  const byCategoryMap = {};
-  const bySubcategoryMap = {};
+    const byCategoryMap = {};
+    const bySubcategoryMap = {};
 
-  for (const a of attempts) {
-    byCategoryMap[a.category] ||= { category: a.category, attempts: 0, correctCount: 0 };
-    byCategoryMap[a.category].attempts += 1;
-    byCategoryMap[a.category].correctCount += a.isCorrect ? 1 : 0;
+    for (const a of attempts) {
+      byCategoryMap[a.category] ||= { category: a.category, attempts: 0, correctCount: 0 };
+      byCategoryMap[a.category].attempts += 1;
+      byCategoryMap[a.category].correctCount += a.is_correct ? 1 : 0;
 
-    const key = `${a.category}__${a.subcategory}`;
-    bySubcategoryMap[key] ||= { category: a.category, subcategory: a.subcategory, attempts: 0, correctCount: 0 };
-    bySubcategoryMap[key].attempts += 1;
-    bySubcategoryMap[key].correctCount += a.isCorrect ? 1 : 0;
+      const key = `${a.category}__${a.subcategory}`;
+      bySubcategoryMap[key] ||= { category: a.category, subcategory: a.subcategory, attempts: 0, correctCount: 0 };
+      bySubcategoryMap[key].attempts += 1;
+      bySubcategoryMap[key].correctCount += a.is_correct ? 1 : 0;
+    }
+
+    const totals = {
+      totalAttempts: attempts.length,
+      totalCorrect: attempts.filter((a) => a.is_correct).length
+    };
+
+    res.json({
+      byCategory: Object.values(byCategoryMap),
+      bySubcategory: Object.values(bySubcategoryMap),
+      totals
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
-
-  const totals = {
-    totalAttempts: attempts.length,
-    totalCorrect: attempts.filter((a) => a.isCorrect).length
-  };
-
-  res.json({
-    byCategory: Object.values(byCategoryMap),
-    bySubcategory: Object.values(bySubcategoryMap),
-    totals
-  });
 });
 
-initDb().then(() => {
-  app.listen(PORT, () => {
-    console.log(`IELTS Grammar Coach 後端已啟動： http://localhost:${PORT}`);
-  });
+app.listen(PORT, () => {
+  console.log(`IELTS Grammar Coach 後端已啟動： http://localhost:${PORT}`);
 });

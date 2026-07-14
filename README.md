@@ -12,7 +12,7 @@ ielts-grammar-coach/
 
 前端**不會**直接呼叫 Anthropic API（瀏覽器端無法安全存放 API Key，也會被 CORS 擋下）。所有請求先送到本機的 Express 後端，由後端夾帶 API Key 轉發給 `https://api.anthropic.com/v1/messages`。
 
-資料（寫作分析紀錄、練習紀錄、答對率統計）以 JSON 檔案持久化儲存在 `server/data.json`，不需要安裝資料庫或編譯任何原生模組。
+資料（寫作分析紀錄、練習紀錄、答對率統計）儲存在 Supabase（Postgres 資料庫），後端用 `service_role` key 連線讀寫，前端完全不會直接接觸 Supabase。
 
 ## 第一次設定
 
@@ -31,15 +31,21 @@ ielts-grammar-coach/
    cp server/.env.example server/.env
    ```
 
-   打開 `server/.env`，填入你的 Anthropic API Key：
+   打開 `server/.env`，填入你的 Anthropic API Key 和 Supabase 連線資訊：
 
    ```
    ANTHROPIC_API_KEY=sk-ant-你的key
    CLAUDE_MODEL=claude-sonnet-4-5-20250929
    PORT=5174
+   SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=sb_secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
 
    > `CLAUDE_MODEL` 可依 Anthropic Console 上顯示的最新可用型號調整，若原本指定的 `claude-sonnet-4-6` 之後正式發布，直接把這個值改掉即可，不需要改程式碼。
+   >
+   > Supabase 的 Project URL 和 `service_role`（或新版 `sb_secret_...`）key 在 Supabase 專案的 Settings → API 頁面可以找到。
+
+4. 建立資料表：到 Supabase 專案左側選單 **SQL Editor** → **New query**，把 `server/supabase-schema.sql` 這個檔案的內容整份貼上去，按 **Run** 執行一次即可（只需要做一次，之後不用重複）。
 
 ## 啟動（本地開發）
 
@@ -64,8 +70,7 @@ npm run dev:client
 
 ## 資料儲存位置
 
-- `server/data.json`：所有寫作分析結果、練習紀錄、答對率統計都存在這裡，重開機、關閉瀏覽器都不會遺失。
-- 若想清空所有紀錄重新開始，直接刪除 `server/data.json` 即可（下次啟動後端會自動重建）。
+所有寫作分析結果、練習紀錄、答對率統計都存在 Supabase 的 Postgres 資料庫（`writing_analyses`、`practice_attempts` 兩張表），跟本機或部署平台的檔案系統無關，重開機、重新部署都不會遺失。若想清空所有紀錄重新開始，到 Supabase 的 **Table Editor** 把這兩張表的資料手動刪除即可，或在 SQL Editor 執行 `truncate writing_analyses, practice_attempts;`。
 
 ## 常見問題
 
@@ -93,9 +98,11 @@ npm run dev:client
    - `ANTHROPIC_API_KEY`：你的 Anthropic API Key
    - `CLAUDE_MODEL`：例如 `claude-sonnet-4-5-20250929`
    - `CORS_ORIGIN`：先留空，等前端部署好拿到網址後再回來填
+   - `SUPABASE_URL`：你的 Supabase Project URL
+   - `SUPABASE_SERVICE_ROLE_KEY`：你的 Supabase `service_role` / `sb_secret_...` key
 4. 部署完成後會拿到一個網址，例如 `https://ielts-grammar-coach.onrender.com`。
 
-> **資料持久性注意事項**：`server/data.json` 存的是練習紀錄與寫作分析歷史。多數雲端平台的檔案系統是暫時性的，重新部署或服務重啟可能會清空這個檔案。若在意資料保存，可在 Render 加購 Persistent Disk，或改用外部資料庫（例如 Supabase、MongoDB Atlas 的免費額度）。純本機使用則不受影響。
+> 資料存在 Supabase，不受 Render 免費方案「檔案系統重啟即清空」的限制，重新部署、服務休眠喚醒都不會遺失資料。
 
 ### 2. 部署前端（以 Vercel 為例，Netlify 步驟類似）
 

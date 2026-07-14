@@ -1,29 +1,16 @@
-import { Low } from 'lowdb';
-import { JSONFile } from 'lowdb/node';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const file = path.join(__dirname, 'data.json');
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const defaultData = {
-  writingAnalyses: [],   // { id, taskType, essayText, bandScore, criteria, sentenceCorrections, errorDiagnosis, createdAt }
-  practiceAttempts: [],  // { id, category, subcategory, question, userAnswer, isCorrect, explanationZh, correctAnswer, createdAt }
-  nextAnalysisId: 1,
-  nextAttemptId: 1
-};
-
-const adapter = new JSONFile(file);
-const db = new Low(adapter, defaultData);
-
-export async function initDb() {
-  await db.read();
-  db.data ||= structuredClone(defaultData);
-  db.data.writingAnalyses ||= [];
-  db.data.practiceAttempts ||= [];
-  db.data.nextAnalysisId ||= 1;
-  db.data.nextAttemptId ||= 1;
-  await db.write();
+if (!supabaseUrl || !supabaseKey) {
+  console.warn(
+    '警告：SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY 未設定，資料庫相關功能會失敗。請檢查 server/.env'
+  );
 }
 
-export default db;
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: false }
+});
+
+export default supabase;
