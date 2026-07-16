@@ -22,10 +22,14 @@ export const api = {
   getWeakAreas: () => request('/weak-areas'),
   generateQuestion: (category, subcategory) =>
     request('/generate-question', { method: 'POST', body: JSON.stringify({ category, subcategory }) }),
-  gradeAnswer: (category, subcategory, question, userAnswer) =>
+  gradeAnswer: (category, subcategory, question, userAnswer, questionType, topic, retryCount) =>
     request('/grade-answer', {
       method: 'POST',
-      body: JSON.stringify({ category, subcategory, question, userAnswer })
+      body: JSON.stringify({ category, subcategory, question, userAnswer, questionType, topic, retryCount })
     }),
+  summarizeProgress: (category, subcategory) =>
+    request('/summarize-progress', { method: 'POST', body: JSON.stringify({ category, subcategory }) }),
+  askTutor: (category, subcategory, tutorQuestion, context) =>
+    request('/ask-tutor', { method: 'POST', body: JSON.stringify({ category, subcategory, tutorQuestion, context }) }),
   getProgress: () => request('/progress')
 };
